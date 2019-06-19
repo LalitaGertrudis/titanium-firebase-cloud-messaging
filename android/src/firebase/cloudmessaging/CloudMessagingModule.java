@@ -13,24 +13,29 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.net.Uri;
+import android.os.Bundle;
+import android.content.SharedPreferences;
+import android.preference.PreferenceManager;
 import org.appcelerator.kroll.KrollModule;
-import org.appcelerator.kroll.KrollObject;
 import org.appcelerator.kroll.annotations.Kroll;
 import org.appcelerator.titanium.TiApplication;
 import org.appcelerator.kroll.common.Log;
-import org.appcelerator.kroll.common.TiConfig;
 import org.appcelerator.titanium.util.TiConvert;
+
+import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.firebase.iid.FirebaseInstanceId;
+import com.google.firebase.iid.InstanceIdResult;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.RemoteMessage;
 import org.appcelerator.kroll.KrollDict;
-import org.appcelerator.kroll.common.Log;
 import java.util.HashMap;
-import org.appcelerator.kroll.KrollFunction;
 import java.util.Map;
+import org.json.JSONObject;
+import ti.modules.titanium.android.notificationmanager.NotificationChannelProxy;
 
 @Kroll.module(name = "CloudMessaging", id = "firebase.cloudmessaging")
 public class CloudMessagingModule extends KrollModule
@@ -38,6 +43,9 @@ public class CloudMessagingModule extends KrollModule
 
 	private static final String LCAT = "FirebaseCloudMessaging";
 	private static CloudMessagingModule instance = null;
+	private static final String FORCE_SHOW_IN_FOREGROUND = "titanium.firebase.cloudmessaging.key";
+	private static String fcmToken = null;
+	private String notificationData = "";
 
 	public CloudMessagingModule()
 	{
@@ -51,11 +59,52 @@ public class CloudMessagingModule extends KrollModule
 		// put module init code that needs to run when the application is created
 	}
 
+	// clang-format off
+	@Kroll.method
+	@Kroll.getProperty
+	private KrollDict getLastData()
+	// clang-format on
+	{
+		KrollDict data = new KrollDict();
+
+		try {
+			Intent intent = TiApplication.getAppRootOrCurrentActivity().getIntent();
+			Bundle extras = intent.getExtras();
+
+			if (extras != null) {
+				for (String key : extras.keySet()) {
+					data.put(key, extras.get(key));
+				}
+
+				data.put("inBackground", true);
+			} else {
+				Log.d(LCAT, "Empty extras in Intent");
+				if (notificationData != "") {
+					data = new KrollDict(new JSONObject(notificationData));
+					data.put("inBackground", true);
+				}
+			}
+		} catch (Exception ex) {
+			Log.e(LCAT, "getLastData" + ex);
+		}
+
+		return data;
+	}
+
 	// Methods
 	@Kroll.method
 	public void registerForPushNotifications()
 	{
-		FirebaseInstanceId.getInstance().getToken();
+		FirebaseInstanceId.getInstance().getInstanceId().addOnSuccessListener(
+			TiApplication.getAppRootOrCurrentActivity(), new OnSuccessListener<InstanceIdResult>() {
+				@Override
+				public void onSuccess(InstanceIdResult instanceIdResult)
+				{
+					fcmToken = instanceIdResult.getToken();
+					onTokenRefresh(fcmToken);
+				}
+		});
+		parseBootIntent();
 	}
 
 	@Kroll.method
@@ -106,19 +155,28 @@ public class CloudMessagingModule extends KrollModule
 
 	public void onTokenRefresh(String token)
 	{
-		if (hasListeners("didRefreshRegistrationToken")) {
-			KrollDict data = new KrollDict();
-			data.put("fcmToken", token);
-			fireEvent("didRefreshRegistrationToken", data);
+		try {
+			if (hasListeners("didRefreshRegistrationToken")) {
+				KrollDict data = new KrollDict();
+				data.put("fcmToken", token);
+				fireEvent("didRefreshRegistrationToken", data);
+				fcmToken = token;
+			}
+		} catch (Exception e) {
+			Log.e(LCAT, "Can't refresh token: " + e.getMessage());
 		}
 	}
 
 	public void onMessageReceived(HashMap message)
 	{
-		if (hasListeners("didReceiveMessage")) {
-			KrollDict data = new KrollDict();
-			data.put("message", new KrollDict(message));
-			fireEvent("didReceiveMessage", data);
+		try {
+			if (hasListeners("didReceiveMessage")) {
+				KrollDict data = new KrollDict();
+				data.put("message", new KrollDict(message));
+				fireEvent("didReceiveMessage", data);
+			}
+		} catch (Exception e) {
+			Log.e(LCAT, "Message exception: " + e.getMessage());
 		}
 	}
 
@@ -134,6 +192,9 @@ public class CloudMessagingModule extends KrollModule
 		String importance = (String) options.optString("importance", sound.equals("silent") ? "low" : "default");
 		String channelId = (String) options.optString("channelId", "default");
 		String channelName = (String) options.optString("channelName", channelId);
+		Boolean vibration = (Boolean) options.optBoolean("vibrate", false);
+		Boolean lights = (Boolean) options.optBoolean("lights", false);
+		Boolean showBadge = (Boolean) options.optBoolean("showBadge", false);
 		int importanceVal = NotificationManager.IMPORTANCE_DEFAULT;
 		if (importance.equals("low")) {
 			importanceVal = NotificationManager.IMPORTANCE_LOW;
@@ -152,6 +213,9 @@ public class CloudMessagingModule extends KrollModule
 		}
 
 		NotificationChannel channel = new NotificationChannel(channelId, channelName, importanceVal);
+		channel.enableVibration(vibration);
+		channel.enableLights(lights);
+		channel.setShowBadge(showBadge);
 		if (soundUri != null) {
 			AudioAttributes audioAttributes = new AudioAttributes.Builder()
 												  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -167,7 +231,12 @@ public class CloudMessagingModule extends KrollModule
 	@Kroll.getProperty
 	public String fcmToken()
 	{
-		return FirebaseInstanceId.getInstance().getToken();
+		if (fcmToken != null) {
+			return fcmToken;
+		} else {
+			registerForPushNotifications();
+			return null;
+		}
 	}
 
 	@Kroll.setProperty
@@ -176,8 +245,73 @@ public class CloudMessagingModule extends KrollModule
 		// empty
 	}
 
+	// clang-format off
+	@Kroll.setProperty
+	@Kroll.method
+	public void setNotificationChannel(Object channel)
+	// clang-format on
+	{
+		if (!(channel instanceof NotificationChannelProxy)) {
+			return;
+		}
+
+		Context context = Utils.getApplicationContext();
+		NotificationChannelProxy channelProxy = (NotificationChannelProxy) channel;
+		NotificationManager notificationManager =
+			(NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+		notificationManager.createNotificationChannel(channelProxy.getNotificationChannel());
+	}
+
+	// clang-format off
+	@Kroll.setProperty
+	@Kroll.method
+	public void setForceShowInForeground(final Boolean showInForeground)
+	// clang-format on
+	{
+		Context context = Utils.getApplicationContext();
+		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+
+		SharedPreferences.Editor editor = prefs.edit();
+		editor.putBoolean(FORCE_SHOW_IN_FOREGROUND, showInForeground);
+		editor.commit();
+	}
+
+	@Kroll.getProperty
+	public Boolean forceShowInForeground()
+	{
+		Context context = Utils.getApplicationContext();
+		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+		return prefs.getBoolean(FORCE_SHOW_IN_FOREGROUND, false);
+	}
+
 	public static CloudMessagingModule getInstance()
 	{
-		return instance;
+		if (instance != null)
+			return instance;
+		else
+			return new CloudMessagingModule();
+	}
+
+	public void setNotificationData(String data)
+	{
+		notificationData = data;
+	}
+
+	public void parseBootIntent()
+	{
+		try {
+			Intent intent = TiApplication.getAppRootOrCurrentActivity().getIntent();
+			String notification = intent.getStringExtra("fcm_data");
+			if (notification != null) {
+				HashMap<String, Object> msg = new HashMap<String, Object>();
+				msg.put("data", new KrollDict(new JSONObject(notification)));
+				onMessageReceived(msg);
+				intent.removeExtra("fcm_data");
+			} else {
+				Log.d(LCAT, "Empty notification in Intent");
+			}
+		} catch (Exception ex) {
+			Log.e(LCAT, "parseBootIntent" + ex);
+		}
 	}
 }

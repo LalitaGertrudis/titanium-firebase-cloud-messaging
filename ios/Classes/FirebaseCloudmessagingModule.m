@@ -27,12 +27,6 @@
 
 #pragma mark Lifecycle
 
-- (void)startup
-{
-  [super startup];
-  NSLog(@"[DEBUG] %@ loaded", self);
-}
-
 - (id)_initWithPageContext:(id<TiEvaluator>)context
 {
   if (self = [super _initWithPageContext:context]) {
@@ -40,6 +34,18 @@
   }
   
   return self;
+}
+
+- (void)_configure
+{
+  [super _configure];
+  [[TiApp app] registerApplicationDelegate:self];
+}
+
+- (void)startup
+{
+  [super startup];
+  NSLog(@"[DEBUG] %@ loaded", self);
 }
 
 #pragma Public APIs
@@ -51,29 +57,13 @@
 
 - (void)registerForPushNotifications:(id)arguments
 {
-  if (floor(NSFoundationVersionNumber) <= NSFoundationVersionNumber_iOS_9_x_Max) {
-    UIUserNotificationType allNotificationTypes =
-    (UIUserNotificationTypeSound | UIUserNotificationTypeAlert | UIUserNotificationTypeBadge);
-    UIUserNotificationSettings *settings =
-    [UIUserNotificationSettings settingsForTypes:allNotificationTypes categories:nil];
-    [[UIApplication sharedApplication] registerUserNotificationSettings:settings];
-  } else {
-#if defined(__IPHONE_10_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_10_0
-    [UNUserNotificationCenter currentNotificationCenter].delegate = self;
-    UNAuthorizationOptions authOptions = UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge;
-    [[UNUserNotificationCenter currentNotificationCenter] requestAuthorizationWithOptions:authOptions completionHandler:^(BOOL granted, NSError * _Nullable error) {
-    }];
-#endif
-  }
-  
-  [[UIApplication sharedApplication] registerForRemoteNotifications];
+  DEPRECATED_REPLACED_REMOVED(@"FirebaseCloudMessaging.registerForPushNotifications", @"2.0.0", @"2.0.0", @"Network.registerForPushNotifications");
 }
 
 - (void)setApnsToken:(NSString *)apnsToken
 {
   [[FIRMessaging messaging] setAPNSToken:[apnsToken dataUsingEncoding:NSUTF8StringEncoding]];
 }
-
 
 - (void)setShouldEstablishDirectChannel:(NSNumber *)shouldEstablishDirectChannel
 {
@@ -82,7 +72,7 @@
 
 - (NSNumber *)shouldEstablishDirectChannel
 {
-  return NUMBOOL([[FIRMessaging messaging] shouldEstablishDirectChannel]);
+  return @([[FIRMessaging messaging] shouldEstablishDirectChannel]);
 }
 
 - (void)appDidReceiveMessage:(id)arguments
@@ -127,11 +117,16 @@
   }
 }
 
-- (void)messaging:(FIRMessaging *)messaging didRefreshRegistrationToken:(NSString *)fcmToken
+- (void)messaging:(FIRMessaging *)messaging didReceiveRegistrationToken:(NSString *)fcmToken
 {
   if ([self _hasListeners:@"didRefreshRegistrationToken"]) {
     [self fireEvent:@"didRefreshRegistrationToken" withObject:@{ @"fcmToken": fcmToken }];
   }
+}
+
+- (void)application:(UIApplication *)application didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken
+{
+  [[FIRMessaging messaging] setAPNSToken:deviceToken];
 }
 
 @end
